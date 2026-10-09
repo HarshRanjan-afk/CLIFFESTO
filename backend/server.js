@@ -25,13 +25,12 @@ app.get('/api/health', (req, res) => {
   res.json({ message: "Obsidian Backend is live and running!" });
 });
 
-// Fetch Products from Supabase
-app.get('/api/Products', async (req, res) => {
+// Fetch all products from Supabase
+app.get('/api/products', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('Products')
-      .select('*')
-      .limit(50); // initial 50 Products
+      .select('*');
 
     if (error) {
       throw error;
