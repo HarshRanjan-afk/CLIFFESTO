@@ -1,10 +1,28 @@
 import { useState, useEffect } from 'react';
-import { Search, ShoppingBag, Signal, SignalHigh, Star, X, Plus, Minus, Trash2, CheckCircle2, MapPin, Truck, CreditCard, Filter, RotateCcw, Check, QrCode, Loader2, ShieldCheck, Cpu, PackageCheck, History, Coins, Sparkles, Wallet } from 'lucide-react';
+import { 
+  Search, ShoppingBag, Signal, SignalHigh, Star, X, Plus, Minus, Trash2, 
+  CheckCircle2, MapPin, Truck, CreditCard, Filter, RotateCcw, Check, 
+  QrCode, Loader2, ShieldCheck, Cpu, PackageCheck, History, Sparkles, 
+  User, LogIn, LogOut, Lock, Mail
+} from 'lucide-react';
+import { supabase } from './supabaseClient';
+
+// Production Render backend URL with local fallback
+const API_URL = import.meta.env.VITE_API_URL || 'https://meesho-backend-wkbr.onrender.com';
 
 export default function App() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // User Auth State
+  const [user, setUser] = useState(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
 
   // Filter & Lite Mode
   const [liteMode, setLiteMode] = useState(false);
@@ -28,19 +46,18 @@ export default function App() {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [x402Details, setX402Details] = useState(null);
 
-  // Animation triggers
+  // Animations & Badges
   const [cartBouncing, setCartBouncing] = useState(false);
   const [showFlyingBadge, setShowFlyingBadge] = useState(false);
   const [recentlyAddedId, setRecentlyAddedId] = useState(null);
   const [coinsEarnedPopup, setCoinsEarnedPopup] = useState(null);
 
-  // Meesho Coins Wallet (Stored in localStorage, starting with 250 free starter coins)
+  // Meesho Coins Wallet
   const [meeshoCoins, setMeeshoCoins] = useState(() => {
     const savedCoins = localStorage.getItem('meesho_wallet_coins');
     return savedCoins !== null ? Number(savedCoins) : 250;
   });
 
-  // Toggle for redeeming coins at checkout
   const [redeemCoinsAtCheckout, setRedeemCoinsAtCheckout] = useState(false);
 
   // Form State
@@ -66,8 +83,22 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
+  // Check Supabase Auth state on load
   useEffect(() => {
-    fetch('http://localhost:5000/api/products')
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Fetch catalog from deployed Render Backend
+  useEffect(() => {
+    fetch(`${API_URL}/api/products`)
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch products');
         return res.json();
@@ -93,6 +124,42 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('meesho_wallet_coins', meeshoCoins.toString());
   }, [meeshoCoins]);
+
+  // Handle Login & Signup
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      if (authMode === 'login') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+        alert("Account created successfully!");
+      }
+      setIsAuthModalOpen(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
 
   const addToCart = (product) => {
     setCart((prevCart) => {
@@ -156,16 +223,10 @@ export default function App() {
     0
   );
 
-  // Coins Rule: 1 Coin = ₹1
-  // Calculate potential coin discount if user redeems coins
   const maxCoinsUsable = Math.min(meeshoCoins, rawCartPrice);
   const coinDiscountApplied = (redeemCoinsAtCheckout || shippingForm.paymentMethod === 'coins') ? maxCoinsUsable : 0;
   const totalCartPrice = Math.max(0, rawCartPrice - coinDiscountApplied);
-
-  // Cash-back reward: Earn 10% back in Meesho Coins on payable amount
   const coinsRewardToEarn = Math.max(5, Math.floor(rawCartPrice * 0.10));
-
-  // Conversion: ₹12 = 1 ALGO
   const estimatedAlgo = (totalCartPrice / 12.0).toFixed(2);
 
   const handleInputChange = (e) => {
@@ -180,7 +241,6 @@ export default function App() {
       return;
     }
 
-    // Direct 100% Coins Payment
     if (shippingForm.paymentMethod === 'coins') {
       if (meeshoCoins < rawCartPrice) {
         alert(`Insufficient Meesho Coins! You need ${rawCartPrice} coins but currently have ${meeshoCoins}.`);
@@ -209,7 +269,7 @@ export default function App() {
       setIsProcessingPayment(true);
 
       try {
-        const res = await fetch('http://localhost:5000/api/orders/x402-checkout', {
+        const res = await fetch(`${API_URL}/api/orders/x402-checkout`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cart, totalAmount: totalCartPrice }),
@@ -274,15 +334,13 @@ export default function App() {
   };
 
   const finalizeOrder = ({ transactionId, details, usedCoinsAmount = 0 }) => {
-    // 1. Deduct redeemed coins
-    let updatedCoins = meeshoCoins - usedCoinsAmount;
-
-    // 2. Award 10% coins cashback on this purchase
-    updatedCoins += coinsRewardToEarn;
+    let updatedCoins = meeshoCoins - usedCoinsAmount + coinsRewardToEarn;
     setMeeshoCoins(updatedCoins);
 
     const orderData = {
       orderId: transactionId,
+      userId: user?.id || 'guest',
+      userEmail: user?.email || shippingForm.phone,
       items: cart,
       shipping: shippingForm,
       totalAmount: totalCartPrice,
@@ -301,7 +359,6 @@ export default function App() {
     setIsCheckoutOpen(false);
     setRedeemCoinsAtCheckout(false);
 
-    // Show temporary celebratory coin banner
     setCoinsEarnedPopup(coinsRewardToEarn);
     setTimeout(() => setCoinsEarnedPopup(null), 4000);
   };
@@ -348,11 +405,11 @@ export default function App() {
   return (
     <div className={`min-h-screen ${liteMode ? 'bg-gray-100 font-sans' : 'bg-gray-50 font-sans'}`}>
       
-      {/* COINS EARNED POPUP BANNER */}
+      {/* COINS POPUP */}
       {coinsEarnedPopup && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-2 text-xs font-black animate-bounce">
           <Sparkles className="w-4 h-4 text-yellow-200" />
-          <span>🎉 You earned +{coinsEarnedPopup} Meesho Coins on this order!</span>
+          <span>🎉 You earned +{coinsEarnedPopup} Meesho Coins!</span>
         </div>
       )}
 
@@ -375,10 +432,10 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* MEESHO COINS WALLET BADGE */}
+            {/* Coins Wallet */}
             <div 
-              className="flex items-center gap-1.5 bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 px-2.5 py-1.5 rounded-full cursor-pointer hover:border-amber-400 transition-colors shadow-sm"
-              title="1 Meesho Coin = ₹1 (Earn 10% on every order)"
+              className="flex items-center gap-1.5 bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 px-2.5 py-1.5 rounded-full cursor-pointer hover:border-amber-400 shadow-sm"
+              title="1 Coin = ₹1"
             >
               <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center font-black text-[10px]">
                 🪙
@@ -393,13 +450,37 @@ export default function App() {
                   setMeeshoCoins(prev => prev + 100);
                 }}
                 className="ml-1 text-[10px] text-amber-800 bg-amber-200/70 hover:bg-amber-300 px-1.5 py-0.5 rounded-full font-bold"
-                title="Add 100 Demo Coins"
               >
                 +100
               </button>
             </div>
 
-            {/* My Orders Button */}
+            {/* User Profile / Login Button */}
+            {user ? (
+              <div className="flex items-center gap-1.5 bg-gray-100 border border-gray-200 px-2.5 py-1.5 rounded-lg text-xs">
+                <User className="w-3.5 h-3.5 text-[#9b2575]" />
+                <span className="font-semibold text-gray-800 max-w-[80px] sm:max-w-[120px] truncate" title={user.email}>
+                  {user.email.split('@')[0]}
+                </span>
+                <button 
+                  onClick={handleLogout}
+                  className="text-gray-400 hover:text-red-500 p-0.5 ml-0.5"
+                  title="Log Out"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-bold bg-pink-50 text-[#9b2575] hover:bg-pink-100 border border-pink-200 px-3 py-1.5 rounded-lg transition-colors"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Log In</span>
+              </button>
+            )}
+
+            {/* Orders Button */}
             <button
               onClick={() => setIsOrdersHistoryOpen(true)}
               className="flex items-center gap-1 text-xs font-bold text-gray-700 hover:text-[#9b2575] px-2.5 py-1.5 rounded-lg border border-gray-200 hover:border-pink-200"
@@ -413,7 +494,7 @@ export default function App() {
               )}
             </button>
 
-            {/* Lite Mode Toggle */}
+            {/* Lite Mode */}
             <button 
               onClick={() => setLiteMode(!liteMode)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
@@ -424,7 +505,7 @@ export default function App() {
               <span className="hidden sm:inline">{liteMode ? 'Lite Mode ON' : 'Lite Mode OFF'}</span>
             </button>
 
-            {/* Cart Trigger */}
+            {/* Cart Button */}
             <div className="relative">
               <button 
                 onClick={() => setIsCartOpen(true)}
@@ -451,12 +532,6 @@ export default function App() {
           </div>
         </div>
       </nav>
-
-      {/* REWARD BANNER STRIP */}
-      <section className="bg-gradient-to-r from-amber-500 via-pink-600 to-purple-600 text-white text-xs py-1.5 px-4 font-semibold text-center flex items-center justify-center gap-2 shadow-sm">
-        <Sparkles className="w-3.5 h-3.5 text-yellow-200" />
-        <span>Meesho Coin Rewards: Earn 10% Coins on every order • 1 Coin = ₹1 • Pay 100% with coins!</span>
-      </section>
 
       {/* FILTER BAR */}
       <section className="bg-white border-b border-gray-200">
@@ -527,7 +602,7 @@ export default function App() {
         </div>
       </section>
 
-      {/* PRODUCTS GRID WITH COIN BUY OPTION */}
+      {/* PRODUCTS GRID */}
       <main className="max-w-6xl mx-auto px-4 py-4">
         <div className="text-xs text-gray-400 mb-3">
           Showing <span className="font-semibold text-gray-700">{filteredProducts.length}</span> products
@@ -561,7 +636,6 @@ export default function App() {
                   onClick={() => setSelectedProduct(product)}
                   className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col cursor-pointer hover:border-gray-300 transition-shadow relative"
                 >
-                  {/* Coin Cash-Back Ribbon */}
                   <div className="absolute top-2 right-2 z-10 bg-amber-500/95 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full flex items-center gap-0.5 shadow-sm">
                     🪙 +{Math.max(5, Math.floor(productPrice * 0.1))} Coins
                   </div>
@@ -605,7 +679,6 @@ export default function App() {
                     </div>
 
                     <div className="mt-auto pt-2">
-                      {/* Price in Rupees */}
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-base font-bold text-gray-900">
                           ₹{productPrice}
@@ -622,7 +695,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Buy with Coins Equivalent Display */}
                       <div className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 w-fit">
                         <span>🪙 Or buy for</span>
                         <span className="font-black text-amber-950">{productPrice} Coins</span>
@@ -656,7 +728,110 @@ export default function App() {
         )}
       </main>
 
-      {/* CHECKOUT MODAL WITH COINS REDEMPTION */}
+      {/* AUTHENTICATION MODAL */}
+      {isAuthModalOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white max-w-sm w-full rounded-2xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-150">
+            <button 
+              onClick={() => setIsAuthModalOpen(false)} 
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="text-center mb-5">
+              <div className="w-12 h-12 bg-pink-100 rounded-full flex items-center justify-center mx-auto mb-2 text-[#9b2575]">
+                <User className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black text-gray-900">
+                {authMode === 'login' ? 'Sign in to Meesho' : 'Create an Account'}
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {authMode === 'login' ? 'Access your orders, coins, and wishlist' : 'Sign up to earn starter coins & discounts'}
+              </p>
+            </div>
+
+            {authError && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-600 text-xs p-2.5 rounded-lg text-center font-medium">
+                {authError}
+              </div>
+            )}
+
+            <form onSubmit={handleAuthSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">Email Address</label>
+                <div className="relative">
+                  <input 
+                    type="email" 
+                    required
+                    placeholder="name@example.com"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg p-2.5 pl-9 text-xs focus:outline-none focus:border-[#9b2575]"
+                  />
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-700 block mb-1">Password</label>
+                <div className="relative">
+                  <input 
+                    type="password" 
+                    required
+                    minLength={6}
+                    placeholder="At least 6 characters"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg p-2.5 pl-9 text-xs focus:outline-none focus:border-[#9b2575]"
+                  />
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                </div>
+              </div>
+
+              <button 
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-[#9b2575] hover:bg-[#831c62] text-white font-bold py-2.5 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
+              >
+                {authLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Processing...
+                  </>
+                ) : (
+                  authMode === 'login' ? 'Sign In' : 'Sign Up'
+                )}
+              </button>
+            </form>
+
+            <div className="text-center mt-4 pt-3 border-t border-gray-100 text-xs text-gray-600">
+              {authMode === 'login' ? (
+                <>
+                  Don't have an account?{' '}
+                  <button 
+                    onClick={() => { setAuthMode('signup'); setAuthError(null); }} 
+                    className="text-[#9b2575] font-bold hover:underline"
+                  >
+                    Sign Up
+                  </button>
+                </>
+              ) : (
+                <>
+                  Already have an account?{' '}
+                  <button 
+                    onClick={() => { setAuthMode('login'); setAuthError(null); }} 
+                    className="text-[#9b2575] font-bold hover:underline"
+                  >
+                    Sign In
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CHECKOUT MODAL */}
       {isCheckoutOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-xl overflow-hidden shadow-2xl max-h-[95vh] flex flex-col">
@@ -671,7 +846,20 @@ export default function App() {
             </div>
 
             <form onSubmit={handleCheckoutSubmit} className="p-5 overflow-y-auto space-y-4">
-              {/* MEESHO COINS REDEEM WIDGET IN CHECKOUT */}
+              {!user && (
+                <div className="bg-pink-50 border border-pink-200 p-2.5 rounded-lg flex items-center justify-between text-xs">
+                  <span className="text-gray-700">Checking out as Guest</span>
+                  <button 
+                    type="button"
+                    onClick={() => setIsAuthModalOpen(true)}
+                    className="text-[#9b2575] font-bold underline"
+                  >
+                    Log in for Coins Sync
+                  </button>
+                </div>
+              )}
+
+              {/* Coins Redemption Widget */}
               <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 p-3 rounded-xl flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center text-sm shadow-sm">
@@ -786,14 +974,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* PAYMENT SELECTION INCLUDING 100% MEESHO COINS OPTION */}
+              {/* Payment Methods */}
               <div className="space-y-2 pt-2 border-t border-gray-100">
                 <h4 className="text-xs font-bold text-gray-600 uppercase flex items-center gap-1.5">
                   <CreditCard className="w-3.5 h-3.5 text-[#9b2575]" /> Payment Option
                 </h4>
 
                 <div className="grid grid-cols-2 gap-2">
-                  {/* 100% Coins Payment Option */}
                   <label className={`border rounded-lg p-2.5 text-center cursor-pointer transition-colors ${shippingForm.paymentMethod === 'coins' ? 'border-amber-500 bg-amber-50 text-amber-900 ring-2 ring-amber-400' : 'border-gray-200'}`}>
                     <input 
                       type="radio" 
@@ -867,7 +1054,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* CHECKOUT PRICE BREAKDOWN WITH COIN DISCOUNT & REWARD */}
+              {/* Price Breakdown */}
               <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1.5 text-xs text-gray-600">
                 <div className="flex justify-between">
                   <span>Items Total ({totalCartCount}):</span>
@@ -890,7 +1077,7 @@ export default function App() {
 
                 <div className="flex items-center gap-1 text-[11px] text-green-700 font-bold bg-green-50 p-1.5 rounded">
                   <Sparkles className="w-3 h-3 text-green-600" />
-                  <span>You will earn +{coinsRewardToEarn} Meesho Coins on this buy!</span>
+                  <span>Earn +{coinsRewardToEarn} Meesho Coins on this buy!</span>
                 </div>
               </div>
 
@@ -911,7 +1098,7 @@ export default function App() {
         </div>
       )}
 
-      {/* DETAILED PAYMENT MODAL (UPI, CARD, ALGORAND) */}
+      {/* DETAILED PAYMENT MODAL */}
       {paymentGatewayOpen && (
         <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
           <div className="bg-white max-w-sm w-full rounded-2xl overflow-hidden shadow-2xl p-6 text-center animate-in zoom-in-95 duration-150">
@@ -944,7 +1131,6 @@ export default function App() {
               )}
             </div>
 
-            {/* UPI DETAILS */}
             {shippingForm.paymentMethod === 'upi' && (
               <div className="space-y-3">
                 <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 inline-block mx-auto">
@@ -964,7 +1150,6 @@ export default function App() {
               </div>
             )}
 
-            {/* CARD DETAILS */}
             {shippingForm.paymentMethod === 'card' && (
               <div className="space-y-3 text-left">
                 <div>
@@ -1003,7 +1188,6 @@ export default function App() {
               </div>
             )}
 
-            {/* ALGORAND x402 DETAILS */}
             {shippingForm.paymentMethod === 'x402' && (
               <div className="space-y-3 text-left bg-purple-50/70 p-3 rounded-xl border border-purple-200 text-xs">
                 <div className="flex items-center justify-between border-b border-purple-100 pb-1.5">
@@ -1050,7 +1234,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ORDER SUCCESS POPUP WITH COINS SUMMARY */}
+      {/* ORDER SUCCESS POPUP */}
       {orderPlaced && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white max-w-md w-full rounded-2xl p-6 text-center shadow-2xl animate-in zoom-in-95 duration-200">
@@ -1060,7 +1244,6 @@ export default function App() {
             <h3 className="text-lg font-black text-gray-900 mb-1">Order Placed Successfully!</h3>
             <p className="text-xs text-gray-500 mb-3">Transaction ID: <span className="font-semibold text-gray-800">{orderPlaced.orderId}</span></p>
 
-            {/* COIN CASHBACK BADGE */}
             <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl mb-4 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5 font-bold text-amber-900">
                 <Sparkles className="w-4 h-4 text-amber-600" /> Coins Earned:
@@ -1228,7 +1411,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MY ORDERS DRAWER */}
+      {/* ORDERS HISTORY MODAL */}
       {isOrdersHistoryOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white max-w-2xl w-full rounded-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
